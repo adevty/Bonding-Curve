@@ -31,8 +31,7 @@ library LinearCurve {
         // Cost = basePrice * amount / WAD
         //      + slope * amount ** (2 * supply + amount) / (2 * WAD ^ 2)
         uint256 weightedSupply = 2 * supply + amount;
-        uint256 baseCost =
-            Math.mulDiv(amount, basePrice, WAD, Math.Rounding.Ceil);
+        uint256 baseCost = Math.mulDiv(amount, basePrice, WAD, Math.Rounding.Ceil);
         uint256 averageSlopePrice =
             Math.mulDiv(weightedSupply, slope, 2 * WAD, Math.Rounding.Ceil);
         uint256 slopeCost =
