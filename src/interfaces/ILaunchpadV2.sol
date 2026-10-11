@@ -63,7 +63,7 @@ interface IPonsV2FeePolicy {
     // both phases apply the same conservative bound.
     function maxInternalPriceImpactBps() external view returns (uint256);
     function feeSweepOperator() external view returns (address);
-    function currentFeePolicy() external view returns (FeePolicySnapshoot memory);
+    function currentFeePolicy() external view returns (FeePolicySnapshot memory);
 }
 
 /**
