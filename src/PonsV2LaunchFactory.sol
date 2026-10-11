@@ -835,7 +835,7 @@ contract PonsV2LaunchFactory is Ownable2Step, ReentrancyGuard, IPonsV2LaunchFact
                 socials: params.socials
             })
         );
-        PonsV2BondingCurve(curve).initialize(token);
+        PonsV2BondingCurve(curve).initialize(token, snipeTaxStartBps, snipeTaxSeconds);
 
         // The creator's own addresses never count as snipers on their own
         // launch: an atomic dev buy lands in the launch second, exactly when

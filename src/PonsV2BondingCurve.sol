@@ -75,6 +75,8 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     event CreatorFeeRecipientUpdated(address indexed previousRecipient, address indexed newRecipient);
     event BuybackEnabledUpdated(bool enabled);
     event AutoGraduationFailed(address indexed token, uint256 gasRemaining);
+    event SnipeTaxCharged(address indexed buyer, address indexed recipient, uint256 penalty);
+    event SnipeTaxExemptionSet(address indexed account, bool exempt);
 
     // Not immutable: the token's constructor needs this curve's real address,
     // so the factory deploys the curve first, then the token, then wires the
@@ -141,6 +143,9 @@ contract PonsV2BondingCurve is ReentrancyGuard {
     // and handed to the graduated pool intact. Everything above it is the
     // sellable allocation, and graduation is exactly its exhaustion.
     uint256 public reservedTokens;
+    uint256 public launchedAt;
+    uint256 public snipeTaxStartBps;
+    uint256 public snipeTaxSeconds;
     mapping(address account => bool exempt) public isSnipeTaxExempt;
 
     modifier onlyFactory() {
@@ -150,6 +155,28 @@ contract PonsV2BondingCurve is ReentrancyGuard {
 
     function exemptFromSnipeTax(address account) external onlyFactory {
         isSnipeTaxExempt[account] = true;
+        emit SnipeTaxExemptionSet(account, true);
+    }
+
+    function getSnipeTaxBps(address buyer, address recipient) public view returns (uint256) {
+        if (isSnipeTaxExempt[buyer] && (recipient == address(0) || isSnipeTaxExempt[recipient])) {
+            return 0;
+        }
+        if (snipeTaxStartBps == 0 || snipeTaxSeconds == 0) {
+            return 0;
+        }
+        if (launchedAt == 0 || block.timestamp <= launchedAt) {
+            return snipeTaxStartBps;
+        }
+        uint256 elapsed = block.timestamp - launchedAt;
+        if (elapsed >= snipeTaxSeconds) {
+            return 0;
+        }
+        return (snipeTaxStartBps * (snipeTaxSeconds - elapsed)) / snipeTaxSeconds;
+    }
+
+    function getSnipeTaxBps(address buyer) external view returns (uint256) {
+        return getSnipeTaxBps(buyer, address(0));
     }
 
     modifier onlyInitialized() {
@@ -245,10 +272,24 @@ contract PonsV2BondingCurve is ReentrancyGuard {
      * one is used as the trigger, the graduated pool is seeded with the same
      * amounts at the same price on every launch.
      */
+    function initialize(address token_, uint256 snipeTaxStartBps_, uint256 snipeTaxSeconds_)
+        external
+        onlyFactory
+    {
+        _initialize(token_, snipeTaxStartBps_, snipeTaxSeconds_);
+    }
+
     function initialize(address token_) external onlyFactory {
+        _initialize(token_, 9_900, 15);
+    }
+
+    function _initialize(address token_, uint256 snipeTaxStartBps_, uint256 snipeTaxSeconds_) private {
         if (token != address(0)) revert AlreadyInitialized();
         if (token_ == address(0)) revert ZeroAddress();
         token = token_;
+        launchedAt = block.timestamp;
+        snipeTaxStartBps = snipeTaxStartBps_;
+        snipeTaxSeconds = snipeTaxSeconds_;
 
         uint256 supply = IERC20(token_).totalSupply();
         uint256 reserved = Math.mulDiv(supply, phantomQuote, phantomQuote + graduationThreshold);
@@ -390,9 +431,20 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         uint256 tokenReserveBefore = trackedTokens;
 
         uint256 spent = received;
+        uint256 snipeTaxBps = getSnipeTaxBps(msg.sender, recipient);
         uint256 fee = (spent * feeBps) / BASIS_POINTS;
         uint256 tax = (spent * creatorTaxBps) / BASIS_POINTS;
-        tokensOut = PonsV2BondingCurveMath.getAmountOut(spent - fee - tax, quoteReserveBefore, tokenReserveBefore, 0);
+        uint256 snipePenalty = 0;
+        uint256 totalDeductionBps = feeBps + creatorTaxBps;
+
+        if (snipeTaxBps > totalDeductionBps) {
+            totalDeductionBps = snipeTaxBps;
+            snipePenalty = (spent * (snipeTaxBps - feeBps - creatorTaxBps)) / BASIS_POINTS;
+        }
+
+        tokensOut = PonsV2BondingCurveMath.getAmountOut(
+            spent - fee - tax - snipePenalty, quoteReserveBefore, tokenReserveBefore, 0
+        );
 
         uint256 sellable = tokenReserveBefore > reservedTokens ? tokenReserveBefore - reservedTokens : 0;
         if (sellable == 0) revert CurveGraduated();
@@ -403,10 +455,15 @@ contract PonsV2BondingCurve is ReentrancyGuard {
             // result back up so the fee legs still come out of the input.
             uint256 net = PonsV2BondingCurveMath.getAmountIn(sellable, quoteReserveBefore, tokenReserveBefore, 0);
             spent = Math.min(
-                Math.mulDiv(net, BASIS_POINTS, BASIS_POINTS - feeBps - creatorTaxBps, Math.Rounding.Ceil), received
+                Math.mulDiv(net, BASIS_POINTS, BASIS_POINTS - totalDeductionBps, Math.Rounding.Ceil), received
             );
             fee = (spent * feeBps) / BASIS_POINTS;
             tax = (spent * creatorTaxBps) / BASIS_POINTS;
+            if (snipeTaxBps > feeBps + creatorTaxBps) {
+                snipePenalty = (spent * (snipeTaxBps - feeBps - creatorTaxBps)) / BASIS_POINTS;
+            } else {
+                snipePenalty = 0;
+            }
         }
 
         // Price bound rather than quantity bound, so a partial fill honours
@@ -414,10 +471,14 @@ contract PonsV2BondingCurve is ReentrancyGuard {
         // `tokensOut >= minTokensOut` whenever `spent == received`.
         if (spent * minTokensOut > received * tokensOut) revert SlippageExceeded(tokensOut, minTokensOut);
 
-        _accrueFees(fee, tax);
+        _accrueFees(fee + snipePenalty, tax);
         trackedQuote += spent;
         trackedTokens -= tokensOut;
         IERC20(token).safeTransfer(recipient, tokensOut);
+
+        if (snipePenalty != 0) {
+            emit SnipeTaxCharged(msg.sender, recipient, snipePenalty);
+        }
 
         uint256 refund = received - spent;
         if (refund != 0) {
@@ -425,7 +486,7 @@ contract PonsV2BondingCurve is ReentrancyGuard {
             _sendQuote(msg.sender, refund);
         }
 
-        emit CurveBuy(msg.sender, recipient, spent, tokensOut, fee, tax);
+        emit CurveBuy(msg.sender, recipient, spent, tokensOut, fee + snipePenalty, tax);
         _tryAutoGraduate();
     }
 
