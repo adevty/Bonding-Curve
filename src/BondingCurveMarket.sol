@@ -35,8 +35,15 @@ contract BondingCurveMarket is ReentrancyGuard {
 
     event Bought(address indexed buyer, uint256 curveTokensOut, uint256 reserveIn);
     event Sold(address indexed seller, uint256 curveTokensIn, uint256 reserveOut);
-    
-    constructor(IERC20 reserveToken_, string memory tokenName_, string memory tokenSymbol_, uint256 basePrice_, uint256 slope_, uint256 maxSupply_) {
+
+    constructor(
+        IERC20 reserveToken_,
+        string memory tokenName_,
+        string memory tokenSymbol_,
+        uint256 basePrice_,
+        uint256 slope_,
+        uint256 maxSupply_
+    ) {
         if (address(reserveToken_) == address(0)) revert ZeroAddress();
         if (basePrice_ == 0) revert ZeroAmount();
         if (maxSupply_ == 0 || maxSupply_ > type(uint256).max / 2) {
@@ -56,22 +63,27 @@ contract BondingCurveMarket is ReentrancyGuard {
     function quoteBuy(uint256 amount) public view returns (uint256) {
         if (amount == 0) revert ZeroAmount();
         uint256 supply = curveToken.totalSupply();
-        if (amount > maxSupply - supply) revert SupplyCapExceeded(); 
+        if (amount > maxSupply - supply) revert SupplyCapExceeded();
         return LinearCurve.quoteBuy(supply, amount, basePrice, slope);
     }
 
     /// @notice "Quote reserve proceeds for sellings an exact token amount"
     function quoteSell(uint256 amount) public view returns (uint256) {
         if (amount == 0) revert ZeroAmount();
-        return LinearCurve.quoteSell(
-            curveToken.totalSupply(), amount, basePrice, slope
-        );
+        return LinearCurve.quoteSell(curveToken.totalSupply(), amount, basePrice, slope);
     }
 
     /// @notice buy an exact amount of curve token
     /// @param amountOut exact amount of curve tokens to mint (18 decimals)
     /// @param maxReserveIn maximum reserve amount the buyer accepts to pay
-    function buy(uint256 amountOut, uint256 maxReserveIn) external nonReentrant returns (uint256 reserveIn) {
+    function buy(
+        uint256 amountOut,
+        uint256 maxReserveIn
+    )
+        external
+        nonReentrant
+        returns (uint256 reserveIn)
+    {
         reserveIn = quoteBuy(amountOut);
         if (reserveIn > maxReserveIn) {
             revert SlippageExceeded(reserveIn, maxReserveIn);
@@ -82,7 +94,7 @@ contract BondingCurveMarket is ReentrancyGuard {
         reserveToken.safeTransferFrom(msg.sender, address(this), reserveIn);
         uint256 received = reserveToken.balanceOf(address(this)) - beforeBalance;
         if (received != reserveIn) revert UnsopportedReserveToken();
-        
+
         curveToken.mint(msg.sender, amountOut);
         emit Bought(msg.sender, amountOut, reserveIn);
     }
@@ -90,7 +102,14 @@ contract BondingCurveMarket is ReentrancyGuard {
     /// @notice burn curve tokens and receive reserve tokens.
     /// @param amountIn amount of curve tokens to burn (18 decimals)
     /// @param minReserveOut minimum reserve payout accepted by the selller
-    function sell(uint256 amountIn, uint256 minReserveOut) external nonReentrant returns (uint256 reserveOut)  {
+    function sell(
+        uint256 amountIn,
+        uint256 minReserveOut
+    )
+        external
+        nonReentrant
+        returns (uint256 reserveOut)
+    {
         reserveOut = quoteSell(amountIn);
         if (reserveOut < minReserveOut) {
             revert SlippageExceeded(reserveOut, minReserveOut);
@@ -127,5 +146,4 @@ contract BondingCurveMarket is ReentrancyGuard {
         // for any valid supply; Math.mulDiv protects the multiplication.
         return basePrice + Math.mulDiv(supply, slope, WAD);
     }
-
 }
