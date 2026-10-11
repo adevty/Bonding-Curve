@@ -39,12 +39,12 @@ interface IPonsV2FeeEscrow {
  * graduated pool is registered. Global hook configuration only governs
  * launches created after a later policy update.
  */
-struct FeePolicySnapshoot {
+struct FeePolicySnapshot {
     address protocolFeeRecipient;
     uint16 protocolFeeShareBps;
     uint16 buybackBurnBps;
     uint16 hookFeeBps;
-    uint16 maxInteralPriceImpactBps;
+    uint16 maxInternalPriceImpactBps;
 }
 
 /**
@@ -55,7 +55,7 @@ struct FeePolicySnapshoot {
 interface IPonsV2FeePolicy {
     function protocolFeeShareBps() external view returns (uint256);
     function buybackBurnBps() external view returns (uint256);
-    function protocolFeeRecipient() external view returns (uint256);
+    function protocolFeeRecipient() external view returns (address);
     function feeEscrow() external view returns (IPonsV2FeeEscrow);
     // Ceiling on how much a single internal buyback conversion is allowed
     // to move the pool's own price, read by the meme hook's real internal
@@ -95,7 +95,7 @@ interface IERC721ReceiverLike {
  *   retry of the seed step could ever satisfy. Terminal, like PoolCreated.
  */
 enum GraduationPhase {
-    NoGraduated,
+    NotGraduated,
     Swept,
     PoolCreated,
     Rescued
