@@ -31,7 +31,7 @@ contract BondingCurveMarket is ReentrancyGuard {
     error SlippageExceeded(uint256 available, uint256 limit);
     error UnsopportedReserveToken();
     error InsufficientReserve(uint256 available, uint256 required);
-    error ZeroPay();
+    error ZeroPayout();
 
     event Bought(address indexed buyer, uint256 curveTokensOut, uint256 reserveIn);
     event Sold(address indexed seller, uint256 curveTokensIn, uint256 reserveOut);
@@ -52,5 +52,80 @@ contract BondingCurveMarket is ReentrancyGuard {
         curveToken = new CurveToken(tokenName_, tokenSymbol_, address(this));
     }
 
-    /// @notice "Not finished yet..."
+    /// @notice "Quote the reserve cost for buying an exact token amount"
+    function quoteBuy(uint256 amount) public view returns (uint256) {
+        if (amount == 0) revert ZeroAmount();
+        uint256 supply = curveToken.totalSupply();
+        if (amount > maxSupply - supply) revert SupplyCapExceeded(); 
+        return LinearCurve.quoteBuy(supply, amount, basePrice, slope);
+    }
+
+    /// @notice "Quote reserve proceeds for sellings an exact token amount"
+    function quoteSell(uint256 amount) public view returns (uint256) {
+        if (amount == 0) revert ZeroAmount();
+        return LinearCurve.quoteSell(
+            curveToken.totalSupply(), amount, basePrice, slope
+        );
+    }
+
+    /// @notice buy an exact amount of curve token
+    /// @param amountOut exact amount of curve tokens to mint (18 decimals)
+    /// @param maxReserveIn maximum reserve amount the buyer accepts to pay
+    function buy(uint256 amountOut, uint256 maxReserveIn) external nonReentrant returns (uint256 reserveIn) {
+        reserveIn = quoteBuy(amountOut);
+        if (reserveIn > maxReserveIn) {
+            revert SlippageExceeded(reserveIn, maxReserveIn);
+        }
+        if (reserveIn == 0) revert ZeroAmount();
+
+        uint256 beforeBalance = reserveToken.balanceOf(address(this));
+        reserveToken.safeTransferFrom(msg.sender, address(this), reserveIn);
+        uint256 received = reserveToken.balanceOf(address(this)) - beforeBalance;
+        if (received != reserveIn) revert UnsopportedReserveToken();
+        
+        curveToken.mint(msg.sender, amountOut);
+        emit Bought(msg.sender, amountOut, reserveIn);
+    }
+
+    /// @notice burn curve tokens and receive reserve tokens.
+    /// @param amountIn amount of curve tokens to burn (18 decimals)
+    /// @param minReserveOut minimum reserve payout accepted by the selller
+    function sell(uint256 amountIn, uint256 minReserveOut) external nonReentrant returns (uint256 reserveOut)  {
+        reserveOut = quoteSell(amountIn);
+        if (reserveOut < minReserveOut) {
+            revert SlippageExceeded(reserveOut, minReserveOut);
+        }
+        if (reserveOut == 0) revert ZeroPayout();
+
+        uint256 reserveBalance = reserveToken.balanceOf(address(this));
+        if (reserveBalance < reserveOut) {
+            revert InsufficientReserve(reserveBalance, minReserveOut);
+        }
+
+        // Effects before reserve transfer; transaction reverts atomically on failure.
+        curveToken.burn(msg.sender, amountIn);
+
+        uint256 recipientBalanceBefore = reserveToken.balanceOf(msg.sender);
+        reserveToken.safeTransfer(msg.sender, reserveOut);
+        uint256 recipientBalanceAfter = reserveToken.balanceOf(msg.sender);
+        if (recipientBalanceAfter - recipientBalanceBefore != reserveOut) {
+            revert UnsopportedReserveToken();
+        }
+
+        emit Sold(msg.sender, amountIn, reserveOut);
+    }
+
+    function reserveBalance() external view returns (uint256) {
+        return reserveToken.balanceOf(address(this));
+    }
+
+    function currentMarginalPrice() external view returns (uint256) {
+        // Result in reserve smallest units per whole curve tokens.
+        // the value is rounded down to an integer reserve unit.
+        uint256 supply = curveToken.totalSupply();
+        // MaxSupply <= uint256.max / 2, so this addition cannot overflow
+        // for any valid supply; Math.mulDiv protects the multiplication.
+        return basePrice + Math.mulDiv(supply, slope, WAD);
+    }
+
 }
