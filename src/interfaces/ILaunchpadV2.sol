@@ -25,7 +25,13 @@ interface IPonsV2FeeEscrow {
     function claimToken(address token) external returns (uint256 amount);
     function claimToken(address token, uint256 amount) external returns (uint256);
     function balanceOf(address recipient) external view returns (uint256);
-    function balanceOfToken(address recipient, address token) external view returns (uint256);
+    function balanceOfToken(
+        address recipient,
+        address token
+    )
+        external
+        view
+        returns (uint256);
 }
 
 /**
@@ -63,9 +69,16 @@ interface IPonsV2FeePolicy {
 /**
  * @notice Minimal ERC-721 receiver signature used by PonsV2LaunchLocker to
  * accept the graduated Uniswap V4 position NFT.
- */ 
+ */
 interface IERC721ReceiverLike {
-    function onERC721Received(address operator, address from, uint256 tokenId, bytes calldata data) external returns (bytes4);
+    function onERC721Received(
+        address operator,
+        address from,
+        uint256 tokenId,
+        bytes calldata data
+    )
+        external
+        returns (bytes4);
 }
 
 /**
